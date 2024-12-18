@@ -5,8 +5,10 @@ description = ""
 readme = "README.md"
 
 dependencies = [
+  "geoopt",
   "jaxtyping>=0.2.36",
   "jupyterlab>=4.3.3",
+  "tensorboard>=2.18.0",
   "timm>=1.0.12",
   "torch>=2.5.1",
   "torchvision>=0.20.1",
@@ -14,3 +16,6 @@ dependencies = [
 
 [tool.uv]
 environments = ["platform_system == 'Linux'"]
+
+[tool.uv.sources]
+geoopt = { git = "https://github.com/geoopt/geoopt.git" }
