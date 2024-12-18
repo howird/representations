@@ -1,0 +1,16 @@
+[project]
+name = "representations"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+
+dependencies = [
+  "jaxtyping>=0.2.36",
+  "jupyterlab>=4.3.3",
+  "timm>=1.0.12",
+  "torch>=2.5.1",
+  "torchvision>=0.20.1",
+]
+
+[tool.uv]
+environments = ["platform_system == 'Linux'"]
