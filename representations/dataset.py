@@ -1,8 +1,9 @@
 import os
 
+import torch
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from torchvision.transforms import InterpolationMode
+from torchvision import datasets
+from torchvision.transforms import InterpolationMode, v2
 
 
 class ImagenetteDataModule:
@@ -31,55 +32,61 @@ class ImagenetteDataModule:
         self.std = (0.229, 0.224, 0.225)
 
         # Strong augmentation for consistency training
-        self.strong_transforms = transforms.Compose(
+        self.strong_transforms = v2.Compose(
             [
-                transforms.RandomResizedCrop(
-                    image_size,
-                    scale=(0.08, 1.0),
+                v2.ToImage(),
+                v2.ToDtype(torch.uint8, scale=True),
+                v2.RandomResizedCrop(
+                    size=self.image_size,
+                    scale=(0.8, 1.0),  # default
+                    antialias=True,
                     interpolation=InterpolationMode.BICUBIC,
                 ),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.ColorJitter(
-                    brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1
-                ),
-                transforms.RandomAutocontrast(p=0.2),
-                transforms.RandomEqualize(p=0.2),
-                transforms.RandomPosterize(bits=4, p=0.2),
-                transforms.RandomSolarize(threshold=128, p=0.1),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=self.mean, std=self.std),
-                transforms.RandomErasing(p=0.1),
+                v2.RandomHorizontalFlip(p=0.5),
+                v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+                v2.RandomAutocontrast(p=0.2),
+                v2.RandomEqualize(p=0.2),
+                v2.RandomPosterize(bits=4, p=0.2),
+                v2.RandomSolarize(threshold=128, p=0.1),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=self.mean, std=self.std),
+                v2.RandomErasing(p=0.1),
             ]
         )
 
         # Weak augmentation for consistency training
-        self.weak_transforms = transforms.Compose(
+        self.weak_transforms = v2.Compose(
             [
-                transforms.RandomResizedCrop(
-                    image_size,
-                    scale=(0.8, 1.0),  # Less aggressive crop
+                v2.ToImage(),
+                v2.ToDtype(torch.uint8, scale=True),
+                v2.RandomResizedCrop(
+                    size=self.image_size,
+                    scale=(0.8, 1.0),
+                    antialias=True,
                     interpolation=InterpolationMode.BICUBIC,
                 ),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.ColorJitter(
+                v2.RandomHorizontalFlip(p=0.5),
+                v2.ColorJitter(
                     brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05
                 ),  # Milder color jittering
-                transforms.ToTensor(),
-                transforms.Normalize(mean=self.mean, std=self.std),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=self.mean, std=self.std),
             ]
         )
 
-        # Standard transforms for labeled data
+        # Standard v2 for labeled data
         self.train_transforms = self.strong_transforms
 
-        self.val_transforms = transforms.Compose(
+        self.val_transforms = v2.Compose(
             [
-                transforms.Resize(
+                v2.ToImage(),
+                v2.ToDtype(torch.uint8, scale=True),
+                v2.Resize(
                     int(image_size * 1.15), interpolation=InterpolationMode.BICUBIC
                 ),
-                transforms.CenterCrop(image_size),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=self.mean, std=self.std),
+                v2.CenterCrop(self.image_size),
+                v2.ToDtype(torch.float32, scale=True),
+                v2.Normalize(mean=self.mean, std=self.std),
             ]
         )
 

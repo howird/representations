@@ -1,17 +1,19 @@
+from .models import SemiSupervisedClassifier
+from .loss import SemiSupervisedLoss
+from .dataset import ImagenetteDataModule
+
 import torch
 from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
-from torchvision import transforms
 import torch.optim as optim
 
 import os
+import logging
 from datetime import datetime
 
-from typing import Tuple, Dict, List
+logger = logging.getLogger(__name__)
 
-from .models import SemiSupervisedClassifier
-from .loss import SemiSupervisedLoss, ClusterAssignment
-from .dataset import ImagenetteDataModule
+from typing import Tuple, Dict, List
 
 
 class SemiSupervisedTrainer:
@@ -19,40 +21,35 @@ class SemiSupervisedTrainer:
         self,
         num_classes: int,
         labeled_ratio: float = 0.1,
-        num_clusters: int = 10,
         feature_dim: int = 2048,
-        learning_rate: float = 0.0001,  # Reduced learning rate
-        lambda_cluster: float = 0.1,  # Reduced cluster loss weight
-        lambda_consistency: float = 0.1,  # Reduced consistency loss weight
-        cluster_update_freq: int = 100,
+        learning_rate: float = 0.001,
+        loss_args: dict = {},
+        model_args: dict = {},
+        validation_freq: int = 10,
         log_dir: str = "runs",
+        exp_name: str = "",
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.labeled_ratio = labeled_ratio
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.run_name = f"ratio_{labeled_ratio}_{timestamp}"
+        self.run_name = f"{timestamp}_ratio_{labeled_ratio}" + (
+            f"_{exp_name.replace(" ", "_")}" if exp_name else ""
+        )
         self.run_dir = os.path.join(log_dir, self.run_name)
         self.writer = SummaryWriter(self.run_dir)
 
         # Initialize model and loss
         self.model = SemiSupervisedClassifier(
-            num_classes=num_classes, feature_dim=feature_dim
+            num_classes, feature_dim=feature_dim, writer=self.writer, **model_args
         ).to(self.device)
-
-        self.criterion = SemiSupervisedLoss(
-            num_clusters=num_clusters,
-            lambda_cluster=lambda_cluster,
-            lambda_consistency=lambda_consistency,
+        self.loss = SemiSupervisedLoss(
+            num_classes, feature_dim=feature_dim, writer=self.writer, **loss_args
         )
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
 
-        self.cluster_assigner = ClusterAssignment(
-            num_clusters=num_clusters, feature_dim=feature_dim
-        )
-
         self.labeled_ratio = labeled_ratio
-        self.cluster_update_freq = cluster_update_freq
+        self.validation_freq = validation_freq
 
     def split_labeled_unlabeled(
         self, dataset: torch.utils.data.Dataset
@@ -88,47 +85,35 @@ class SemiSupervisedTrainer:
                 unlabeled_iter = iter(unlabeled_loader)
                 unlabeled_imgs, _ = next(unlabeled_iter)
 
-            # Move to device
             labeled_imgs = labeled_imgs.to(self.device)
             labels = labels.to(self.device)
             unlabeled_imgs = unlabeled_imgs.to(self.device)
 
-            # Convert tensor back to PIL Image for transforms
-            to_pil = transforms.ToPILImage()
-            unlabeled_pil = [to_pil(img) for img in unlabeled_imgs]
+            unlabeled_aug1 = data_module.weak_transforms(unlabeled_imgs).to(self.device)
+            unlabeled_aug2 = data_module.strong_transforms(unlabeled_imgs).to(
+                self.device
+            )
 
-            # Apply transforms to PIL images
-            unlabeled_aug1 = torch.stack(
-                [data_module.weak_transforms(img) for img in unlabeled_pil]
-            ).to(self.device)
-            unlabeled_aug2 = torch.stack(
-                [data_module.strong_transforms(img) for img in unlabeled_pil]
-            ).to(self.device)
-
-            # Forward passes
             labeled_features, labeled_logits = self.model(labeled_imgs)
             unlabeled_features, unlabeled_logits = self.model(unlabeled_aug1)
             _, logits_aug2 = self.model(unlabeled_aug2)
 
-            # Update cluster assignments periodically
-            if batch_idx % self.cluster_update_freq == 0:
-                cluster_assignments = self.cluster_assigner.update_clusters(
-                    unlabeled_features.detach()
-                )
-
-            # Compute loss
-            loss, batch_losses = self.criterion(
-                logits_labeled=labeled_logits,
-                labels=labels,
-                logits_unlabeled=unlabeled_logits,
-                cluster_assignments=cluster_assignments,
+            loss, batch_losses = self.loss(
+                labeled_features,
+                labeled_logits,
+                labels,
+                epoch,
+                batch_idx,
+                unlabeled_features,
+                unlabeled_logits,
                 logits_aug1=unlabeled_logits,
                 logits_aug2=logits_aug2,
             )
 
             # Skip update if loss is nan
             if torch.isnan(loss):
-                print(f"Warning: NaN loss detected at batch {batch_idx}")
+                logger.warning(f"NaN loss detected at batch {batch_idx}")
+                self.optimizer.zero_grad()
                 continue
 
             # Update model with gradient clipping
@@ -137,7 +122,7 @@ class SemiSupervisedTrainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
 
-            # Track losses
+            # Track losses and scaling
             total_loss += loss.item()
             for k, v in batch_losses.items():
                 loss_components[k] += v
@@ -149,8 +134,52 @@ class SemiSupervisedTrainer:
             **{k: v / num_batches for k, v in loss_components.items()},
         }
 
+    def validate(self, val_loader: DataLoader) -> float:
+        """Validate the model using mean per-class accuracy"""
+        self.model.eval()
+        num_classes = self.model.num_classes
+        class_correct = torch.zeros(num_classes, device=self.device)
+        class_total = torch.zeros(num_classes, device=self.device)
+
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images = images.to(self.device)
+                labels = labels.to(self.device)
+
+                _, outputs = self.model(images)
+                _, predicted = torch.max(outputs.data, 1)
+
+                # Calculate per-class accuracy
+                for cls in range(num_classes):
+                    cls_mask = labels == cls
+                    if cls_mask.sum() > 0:  # Only evaluate if we have samples
+                        class_correct[cls] += ((predicted == labels) & cls_mask).sum()
+                        class_total[cls] += cls_mask.sum()
+
+        # Calculate mean per-class accuracy
+        per_class_acc = torch.where(
+            class_total > 0,
+            100.0 * class_correct / class_total,
+            torch.zeros_like(class_total),
+        )
+        valid_classes = (class_total > 0).sum()
+        mean_accuracy = per_class_acc.sum() / valid_classes
+
+        # Log per-class accuracies
+        for cls in range(num_classes):
+            if class_total[cls] > 0:
+                logger.info(
+                    f"Class {cls} accuracy: {per_class_acc[cls]:.2f}% "
+                    f"({class_correct[cls]}/{class_total[cls]})"
+                )
+
+        return mean_accuracy.item()
+
     def train(
-        self, data_module: ImagenetteDataModule, num_epochs: int = 100, batch_size: int = 64
+        self,
+        data_module: ImagenetteDataModule,
+        num_epochs: int = 100,
+        batch_size: int = 64,
     ) -> Dict[str, List[float]]:
         """Full training loop"""
         train_dataset = data_module.train_dataloader().dataset
@@ -167,11 +196,15 @@ class SemiSupervisedTrainer:
             unlabeled_dataset, batch_size=batch_size, shuffle=True, num_workers=4
         )
 
+        # Get validation dataloader
+        val_loader = data_module.val_dataloader()
+
         history = {
             "total_loss": [],
             "supervised": [],
             "clustering": [],
             "consistency": [],
+            "val_accuracy": [],
         }
 
         for epoch in range(num_epochs):
@@ -184,16 +217,23 @@ class SemiSupervisedTrainer:
                 history[k].append(v)
                 self.writer.add_scalar(f"Loss/{k}", v, epoch)
 
-            print(f"Epoch {epoch+1}/{num_epochs}")
-            print(f"Total Loss: {epoch_losses['total_loss']:.4f}")
+            # Validate every N epochs
+            if (epoch + 1) % self.validation_freq == 0:
+                val_accuracy = self.validate(val_loader)
+                history["val_accuracy"].append(val_accuracy)
+                self.writer.add_scalar("Accuracy/validation", val_accuracy, epoch)
+                logger.info(f"Epoch {epoch+1}/{num_epochs}")
+                logger.info(f"Total Loss: {epoch_losses['total_loss']:.4f}")
+                logger.info(f"Validation Accuracy: {val_accuracy:.2f}%")
+            else:
+                logger.info(f"Epoch {epoch+1}/{num_epochs}")
+                logger.info(f"Total Loss: {epoch_losses['total_loss']:.4f}")
 
         # Save model weights in the run directory
         os.makedirs(self.run_dir, exist_ok=True)
-        save_path = os.path.join(
-            self.run_dir, f"model_ratio_{self.labeled_ratio:.3f}.pt"
-        )
+        save_path = os.path.join(self.run_dir, "last.pt")
         torch.save(self.model.state_dict(), save_path)
-        print(f"Model saved to {save_path}")
+        logger.info(f"Model saved to {save_path}")
 
         # Close tensorboard writer
         self.writer.close()

@@ -1,7 +1,16 @@
 import sys
-import os
 import argparse
+import logging
+import debugpy
 from typing import List
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler("training.log")],
+)
+logger = logging.getLogger(__name__)
 
 sys.path.append("../representations")
 
@@ -36,20 +45,33 @@ def main():
     parser.add_argument(
         "--epochs", type=int, default=100, help="Number of training epochs"
     )
+    parser.add_argument(
+        "--debug", action="store_true", help="Wait for debugpy connection on port 5678"
+    )
+    parser.add_argument("--exp-name", type=str, default="", help="Name of experiment.")
 
     args = parser.parse_args()
 
-    # Create models directory if it doesn't exist
-    os.makedirs("models", exist_ok=True)
+    if args.debug:
+        logger.info("Waiting for debugpy connection on port 5678...")
+        debugpy.listen(5678)
+        debugpy.wait_for_client()
+        logger.info("Debugpy client connected!")
 
     # Load dataset
     data = ImagenetteDataModule(args.data_path, batch_size=args.batch_size)
 
     # Train for each ratio
     for ratio in args.labeled_ratio:
-        print(f"\nTraining with labeled_ratio: {ratio}")
-        trainer = SemiSupervisedTrainer(num_classes=10, labeled_ratio=ratio)
-        history = trainer.train(data, num_epochs=args.epochs)
+        logger.info(
+            f"\nStarting training for experiment '{args.exp_name}' with labeled_ratio: {ratio}"
+        )
+        trainer = SemiSupervisedTrainer(
+            num_classes=10, labeled_ratio=ratio, exp_name=args.exp_name
+        )
+        history = trainer.train(
+            data, num_epochs=args.epochs, batch_size=args.batch_size
+        )
 
 
 if __name__ == "__main__":

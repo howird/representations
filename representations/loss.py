@@ -1,8 +1,16 @@
+import logging
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch.utils.tensorboard import SummaryWriter
+
 from typing import Tuple, Optional, Dict
+
+
+logger = logging.getLogger(__name__)
 
 
 class SemiSupervisedLoss(nn.Module):
@@ -12,24 +20,46 @@ class SemiSupervisedLoss(nn.Module):
 
     def __init__(
         self,
-        num_clusters: int,
+        num_classes: int,
+        feature_dim: int,
+        writer: SummaryWriter,
         lambda_cluster: float = 1.0,
+        cluster_rampup_epochs: int = 0,
+        cluster_update_freq: int = 10,
+        cluster_all: bool = True,
         lambda_consistency: float = 1.0,
         temperature: float = 0.5,
     ):
         super().__init__()
-        self.num_clusters = num_clusters
+        self.num_classes = num_classes
+        self.writer = writer
+
         self.lambda_cluster = lambda_cluster
+        self.cluster_rampup_epochs = cluster_rampup_epochs
+        self.cluster_update_freq = cluster_update_freq
+        self.cluster_all = cluster_all
+
         self.lambda_consistency = lambda_consistency
         self.temperature = temperature
-        self.supervised_criterion = nn.CrossEntropyLoss()
+
+        self.supervised_loss = nn.CrossEntropyLoss()
+        self.cluster_assigner = ClusterAssignment(num_classes, feature_dim)
+
+    def get_cluster_scale(self, epoch: int) -> float:
+        """Calculate cluster loss scaling factor using cosine rampup"""
+        if epoch >= self.cluster_rampup_epochs:
+            return 1.0
+        return float(1 - math.cos(math.pi * epoch / self.cluster_rampup_epochs)) / 2.0
 
     def forward(
         self,
+        features_labeled: Tensor,
         logits_labeled: Tensor,
         labels: Tensor,
+        epoch: int,
+        batch_idx: int,
+        features_unlabeled: Optional[Tensor] = None,
         logits_unlabeled: Optional[Tensor] = None,
-        cluster_assignments: Optional[Tensor] = None,
         logits_aug1: Optional[Tensor] = None,
         logits_aug2: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Dict[str, float]]:
@@ -48,10 +78,30 @@ class SemiSupervisedLoss(nn.Module):
             total_loss: Combined loss value
             loss_dict: Dictionary containing individual loss components
         """
-        # Supervised cross-entropy loss
-        sup_loss = self.supervised_criterion(logits_labeled, labels)
+
+        # Update cluster assignments periodically
+        if batch_idx % self.cluster_update_freq == 0:
+            if self.cluster_all:
+                # Combine labeled and unlabeled features for better clustering
+                all_features = torch.cat(
+                    [features_labeled.detach(), features_unlabeled.detach()], dim=0
+                )
+                cluster_assignments = self.cluster_assigner.update_clusters(
+                    all_features
+                )
+                # Only use assignments for unlabeled data
+                cluster_assignments = cluster_assignments[features_labeled.size(0) :]
+            else:
+                cluster_assignments = self.cluster_assigner.update_clusters(
+                    features_unlabeled.detach()
+                )
+        else:
+            cluster_assignments = None
+
+        sup_loss = self.supervised_loss(logits_labeled, labels)
+
         if torch.isnan(sup_loss):
-            print(f"Warning: NaN loss detected for sup_loss")
+            logger.warning("NaN loss detected for sup_loss")
 
         loss_dict = {"supervised": sup_loss.item()}
         total_loss = sup_loss
@@ -63,9 +113,16 @@ class SemiSupervisedLoss(nn.Module):
             cluster_loss = F.cross_entropy(
                 logits_unlabeled[:min_batch_size], cluster_assignments[:min_batch_size]
             )
+
             if torch.isnan(cluster_loss):
-                print(f"Warning: NaN loss detected for cluster_loss")
-            total_loss += self.lambda_cluster * cluster_loss
+                logger.warning("NaN loss detected for cluster_loss")
+
+            cluster_scale = self.get_cluster_scale(epoch)
+            if batch_idx == 0:  # Log once per epoch
+                self.writer.add_scalar("Schedule/cluster_scale", cluster_scale, epoch)
+                logger.debug(f"Scheduled Cluster Scale: {cluster_scale:.4f}")
+
+            total_loss += self.lambda_cluster * cluster_scale * cluster_loss
             loss_dict["clustering"] = cluster_loss.item()
 
         # Consistency loss between augmentations
@@ -81,7 +138,7 @@ class SemiSupervisedLoss(nn.Module):
             )
 
             if torch.isnan(consistency_loss):
-                print(f"Warning: NaN loss detected for consistency_loss")
+                logger.warning("NaN loss detected for consistency_loss")
 
             total_loss += self.lambda_consistency * consistency_loss
             loss_dict["consistency"] = consistency_loss.item()
@@ -92,27 +149,28 @@ class SemiSupervisedLoss(nn.Module):
 class ClusterAssignment:
     """Compute and update cluster assignments for unlabeled data"""
 
-    def __init__(self, num_clusters: int, feature_dim: int):
-        self.num_clusters = num_clusters
+    def __init__(self, num_classes: int, feature_dim: int, max_iterations: int = 10):
+        self.num_classes = num_classes
         self.feature_dim = feature_dim
         self.centroids = None
+        self.max_iterations = max_iterations
 
     @torch.no_grad()
     def update_clusters(self, features: Tensor) -> Tensor:
         """
-        Update cluster centroids using k-means
+        Update cluster centroids using k-means on all available features
 
         Args:
-            features: Feature embeddings [N, D]
+            features: Combined labeled and unlabeled feature embeddings [N, D]
         Returns:
             assignments: Cluster assignments [N]
         """
         # Initialize centroids if not exists
         if self.centroids is None:
-            indices = torch.randperm(features.size(0))[: self.num_clusters]
+            indices = torch.randperm(features.size(0))[: self.num_classes]
             self.centroids = features[indices].clone()
 
-        for _ in range(10):  # Simple k-means iterations
+        for _ in range(self.max_iterations):
             # Compute distances to centroids
             dists = torch.cdist(features, self.centroids)
 
@@ -121,14 +179,12 @@ class ClusterAssignment:
 
             # Update centroids
             new_centroids = torch.zeros_like(self.centroids)
-            for k in range(self.num_clusters):
+            for k in range(self.num_classes):
                 if (assignments == k).any():
                     new_centroids[k] = features[assignments == k].mean(0)
                 else:
-                    # If empty cluster, keep old centroid
                     new_centroids[k] = self.centroids[k]
 
-            # Check convergence
             if torch.allclose(self.centroids, new_centroids):
                 break
 
