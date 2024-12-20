@@ -1,5 +1,5 @@
 from ..models.semisupclassifier import SemiSupervisedClassifier
-from ..models.backbones import ResNet50Backbone, EfficientNetBackbone, BasicCNNBackbone
+from ..models.backbones import ResNet50Backbone, EfficientNetBackbone
 from ..losses.semisuploss import SemiSupervisedLoss
 from ..datasets.imagenette import ImagenetteDataModule
 
@@ -26,6 +26,7 @@ class SemiSupervisedTrainer:
         loss_args: dict = {},
         model_args: dict = {},
         validation_freq: int = 10,
+        feature_dim: int = 512,
         log_dir: str = "runs",
         exp_name: str = "",
     ):
@@ -39,12 +40,12 @@ class SemiSupervisedTrainer:
         self.writer = SummaryWriter(self.run_dir)
 
         # Initialize model and loss
-        # backbone = ResNet50Backbone(pretrained=True)
-        backbone = EfficientNetBackbone(pretrained=False)
+        # backbone = ResNet50Backbone(feature_dim, pretrained=True)
+        backbone = EfficientNetBackbone(feature_dim, pretrained=False)
         self.model = SemiSupervisedClassifier(
-            num_classes, backbone, backbone.feature_dim, self.writer, **model_args
+            num_classes, backbone, feature_dim, self.writer, **model_args
         ).to(self.device)
-        self.loss = SemiSupervisedLoss(num_classes, backbone.feature_dim, self.writer, **loss_args)
+        self.loss = SemiSupervisedLoss(num_classes, feature_dim, self.writer, **loss_args)
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
 
