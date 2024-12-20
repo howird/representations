@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 sys.path.append("../representations")
 
-from representations.dataset import ImagenetteDataModule
-from representations.trainer import SemiSupervisedTrainer
+from representations.datasets.imagenette import ImagenetteDataModule
+from representations.trainers.trainer import SemiSupervisedTrainer
 
 
 def parse_ratio(ratio_str: str) -> List[float]:

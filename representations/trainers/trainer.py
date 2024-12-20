@@ -1,6 +1,7 @@
-from .models import SemiSupervisedClassifier
-from .loss import SemiSupervisedLoss
-from .dataset import ImagenetteDataModule
+from ..models.semisupclassifier import SemiSupervisedClassifier
+from ..models.backbones import ResNet50Backbone
+from ..losses.semisuploss import SemiSupervisedLoss
+from ..datasets.imagenette import ImagenetteDataModule
 
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -40,7 +41,7 @@ class SemiSupervisedTrainer:
 
         # Initialize model and loss
         self.model = SemiSupervisedClassifier(
-            num_classes, feature_dim=feature_dim, writer=self.writer, **model_args
+            num_classes, ResNet50Backbone(), feature_dim, writer=self.writer, **model_args
         ).to(self.device)
         self.loss = SemiSupervisedLoss(
             num_classes, feature_dim=feature_dim, writer=self.writer, **loss_args
