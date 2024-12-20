@@ -30,7 +30,7 @@ class SoftKMeansClusterAssignment(nn.Module):
         self.centroids = nn.Parameter(torch.zeros(num_classes, feature_dim), requires_grad=False).to(self.device)
         self.initialized = False
 
-    def update_clusters(self, features: Tensor, normalize: bool = True) -> Tensor:
+    def update_clusters(self, features: Tensor) -> Tensor:
         """
         Update cluster centroids using soft k-means on all available features
 
@@ -43,9 +43,6 @@ class SoftKMeansClusterAssignment(nn.Module):
         if torch.isnan(features).any() or torch.isinf(features).any():
             logger.warning("Invalid values detected in features, skipping cluster update")
             return torch.zeros(features.size(0), dtype=torch.long, device=features.device)
-
-        if normalize:
-            features = F.normalize(features, dim=1)
 
         # Initialize centroids if not done yet
         if not self.initialized:

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -48,5 +49,5 @@ class SemiSupervisedClassifier(nn.Module):
         """
         features = self.backbone(x)
         logits = self.classifier(features)
-
-        return features, logits
+            
+        return F.normalize(features, dim=1), logits
