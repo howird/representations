@@ -20,3 +20,10 @@ environments = ["platform_system == 'Linux'"]
 
 [tool.uv.sources]
 geoopt = { git = "https://github.com/geoopt/geoopt.git" }
+
+[tool.ruff]
+line-length = 99
+indent-width = 4
+
+[tool.ruff.lint]
+ignore = ["E402"]

@@ -86,9 +86,7 @@ class SemiSupervisedLoss(nn.Module):
                 all_features = torch.cat(
                     [features_labeled.detach(), features_unlabeled.detach()], dim=0
                 )
-                cluster_assignments = self.cluster_assigner.update_clusters(
-                    all_features
-                )
+                cluster_assignments = self.cluster_assigner.update_clusters(all_features)
                 # Only use assignments for unlabeled data
                 cluster_assignments = cluster_assignments[features_labeled.size(0) :]
             else:
@@ -101,7 +99,9 @@ class SemiSupervisedLoss(nn.Module):
         sup_loss = self.supervised_loss(logits_labeled, labels)
 
         if torch.isnan(sup_loss):
-            logger.warning("NaN loss detected for sup_loss")
+            logger.warning(
+                f"NaN sup_loss detected. logits_labeled stats: min={logits_labeled.min():.3f}, max={logits_labeled.max():.3f}"
+            )
 
         loss_dict = {"supervised": sup_loss.item()}
         total_loss = sup_loss
@@ -165,14 +165,22 @@ class ClusterAssignment:
         Returns:
             assignments: Cluster assignments [N]
         """
+        # Check for invalid values
+        if torch.isnan(features).any() or torch.isinf(features).any():
+            logger.warning("Invalid values detected in features, skipping cluster update")
+            return torch.zeros(features.size(0), dtype=torch.long, device=features.device)
+
+        # Normalize features
+        features_norm = F.normalize(features, dim=1)
+
         # Initialize centroids if not exists
         if self.centroids is None:
-            indices = torch.randperm(features.size(0))[: self.num_classes]
-            self.centroids = features[indices].clone()
+            indices = torch.randperm(features_norm.size(0))[: self.num_classes]
+            self.centroids = features_norm[indices].clone()
 
         for _ in range(self.max_iterations):
             # Compute distances to centroids
-            dists = torch.cdist(features, self.centroids)
+            dists = torch.cdist(features_norm, self.centroids)
 
             # Assign to nearest centroid
             assignments = dists.argmin(dim=1)
@@ -180,8 +188,11 @@ class ClusterAssignment:
             # Update centroids
             new_centroids = torch.zeros_like(self.centroids)
             for k in range(self.num_classes):
-                if (assignments == k).any():
-                    new_centroids[k] = features[assignments == k].mean(0)
+                mask = assignments == k
+                if mask.any():
+                    cluster_features = features_norm[mask]
+                    if not torch.isnan(cluster_features).any():
+                        new_centroids[k] = F.normalize(cluster_features.mean(0), dim=0)
                 else:
                     new_centroids[k] = self.centroids[k]
 

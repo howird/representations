@@ -2,6 +2,8 @@ import sys
 import argparse
 import logging
 import debugpy
+
+from pathlib import Path
 from typing import List
 
 # Configure logging
@@ -27,24 +29,16 @@ def parse_ratio(ratio_str: str) -> List[float]:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Train semi-supervised model on Imagenette"
-    )
-    parser.add_argument(
-        "--data_path", type=str, required=True, help="Path to Imagenette dataset"
-    )
+    parser = argparse.ArgumentParser(description="Train semi-supervised model on Imagenette")
+    parser.add_argument("--data_path", type=Path, required=True, help="Path to Imagenette dataset")
     parser.add_argument(
         "--labeled_ratio",
         type=parse_ratio,
         required=True,
         help="Ratio of labeled data (single float or comma-separated list)",
     )
-    parser.add_argument(
-        "--batch-size", type=int, default=64, help="Number of samples in a batch"
-    )
-    parser.add_argument(
-        "--epochs", type=int, default=100, help="Number of training epochs"
-    )
+    parser.add_argument("--batch-size", type=int, default=64, help="Number of samples in a batch")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
     parser.add_argument(
         "--debug", action="store_true", help="Wait for debugpy connection on port 5678"
     )
@@ -69,9 +63,7 @@ def main():
         trainer = SemiSupervisedTrainer(
             num_classes=10, labeled_ratio=ratio, exp_name=args.exp_name
         )
-        history = trainer.train(
-            data, num_epochs=args.epochs, batch_size=args.batch_size
-        )
+        _ = trainer.train(data, num_epochs=args.epochs, batch_size=args.batch_size)
 
 
 if __name__ == "__main__":

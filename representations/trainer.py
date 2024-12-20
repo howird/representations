@@ -51,9 +51,7 @@ class SemiSupervisedTrainer:
         self.labeled_ratio = labeled_ratio
         self.validation_freq = validation_freq
 
-    def split_labeled_unlabeled(
-        self, dataset: torch.utils.data.Dataset
-    ) -> Tuple[Subset, Subset]:
+    def split_labeled_unlabeled(self, dataset: torch.utils.data.Dataset) -> Tuple[Subset, Subset]:
         """Split dataset into labeled and unlabeled subsets"""
         num_samples = len(dataset)
         num_labeled = int(num_samples * self.labeled_ratio)
@@ -89,10 +87,10 @@ class SemiSupervisedTrainer:
             labels = labels.to(self.device)
             unlabeled_imgs = unlabeled_imgs.to(self.device)
 
+            labeled_imgs = data_module.strong_transforms(labeled_imgs).to(self.device)
+
             unlabeled_aug1 = data_module.weak_transforms(unlabeled_imgs).to(self.device)
-            unlabeled_aug2 = data_module.strong_transforms(unlabeled_imgs).to(
-                self.device
-            )
+            unlabeled_aug2 = data_module.strong_transforms(unlabeled_imgs).to(self.device)
 
             labeled_features, labeled_logits = self.model(labeled_imgs)
             unlabeled_features, unlabeled_logits = self.model(unlabeled_aug1)
@@ -208,9 +206,7 @@ class SemiSupervisedTrainer:
         }
 
         for epoch in range(num_epochs):
-            epoch_losses = self.train_epoch(
-                labeled_loader, unlabeled_loader, data_module, epoch
-            )
+            epoch_losses = self.train_epoch(labeled_loader, unlabeled_loader, data_module, epoch)
 
             # Record losses
             for k, v in epoch_losses.items():
