@@ -15,8 +15,8 @@ class SemiSupervisedClassifier(nn.Module):
         self,
         num_classes: int,
         backbone: nn.Module,
+        feature_dim: int,
         writer: SummaryWriter,
-        feature_dim: int = 2048,
     ):
         super().__init__()
         self.num_classes = num_classes

@@ -22,7 +22,6 @@ class SemiSupervisedTrainer:
         self,
         num_classes: int,
         labeled_ratio: float = 0.1,
-        feature_dim: int = 2048,
         learning_rate: float = 0.001,
         loss_args: dict = {},
         model_args: dict = {},
@@ -40,12 +39,11 @@ class SemiSupervisedTrainer:
         self.writer = SummaryWriter(self.run_dir)
 
         # Initialize model and loss
+        backbone = ResNet50Backbone(pretrained=True)
         self.model = SemiSupervisedClassifier(
-            num_classes, ResNet50Backbone(), feature_dim, writer=self.writer, **model_args
+            num_classes, backbone, backbone.feature_dim, self.writer, **model_args
         ).to(self.device)
-        self.loss = SemiSupervisedLoss(
-            num_classes, feature_dim=feature_dim, writer=self.writer, **loss_args
-        )
+        self.loss = SemiSupervisedLoss(num_classes, backbone.feature_dim, self.writer, **loss_args)
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
 
@@ -73,7 +71,12 @@ class SemiSupervisedTrainer:
         """Train for one epoch"""
         self.model.train()
         total_loss = 0
-        loss_components = {"supervised": 0.0, "clustering": 0.0, "consistency": 0.0}
+        loss_components = {
+            "supervised": 0.0,
+            "clustering": 0.0,
+            "consistency": 0.0,
+            "cluster_consistency": 0.0,
+        }
 
         unlabeled_iter = iter(unlabeled_loader)
 
