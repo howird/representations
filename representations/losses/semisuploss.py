@@ -46,11 +46,11 @@ class SemiSupervisedLoss(nn.Module):
         self.temperature = temperature
 
         self.supervised_loss = nn.CrossEntropyLoss()
-        self.cluster_assigner = (
-            SoftKMeansClusterAssignment(num_classes, feature_dim)
-            if soft_kmeans
-            else KMeansClusterAssignment(num_classes, feature_dim)
-        )
+        # self.cluster_assigner = (
+        #     SoftKMeansClusterAssignment(num_classes, feature_dim)
+        #     if soft_kmeans
+        #     else KMeansClusterAssignment(num_classes, feature_dim)
+        # )
 
     def get_cluster_scale(self, epoch: int) -> float:
         """Calculate cluster loss scaling factor using cosine rampup"""
@@ -97,18 +97,18 @@ class SemiSupervisedLoss(nn.Module):
             loss_dict: Dictionary containing individual loss components
         """
 
-        if self.cluster_all:
-            # Combine labeled and unlabeled features for better clustering
-            all_features = torch.cat(
-                [features_labeled.detach(), features_unlabeled.detach()], dim=0
-            )
-            cluster_assignments = self.cluster_assigner.update_clusters(all_features)
-            # Only use assignments for unlabeled data
-            cluster_assignments = cluster_assignments[features_labeled.size(0) :]
-        else:
-            cluster_assignments = self.cluster_assigner.update_clusters(
-                features_unlabeled.detach()
-            )
+        # if self.cluster_all:
+        #     # Combine labeled and unlabeled features for better clustering
+        #     all_features = torch.cat(
+        #         [features_labeled.detach(), features_unlabeled.detach()], dim=0
+        #     )
+        #     cluster_assignments = self.cluster_assigner.update_clusters(all_features)
+        #     # Only use assignments for unlabeled data
+        #     cluster_assignments = cluster_assignments[features_labeled.size(0) :]
+        # else:
+        #     cluster_assignments = self.cluster_assigner.update_clusters(
+        #         features_unlabeled.detach()
+        #     )
 
         sup_loss = self.supervised_loss(logits_labeled, labels)
 
@@ -120,50 +120,50 @@ class SemiSupervisedLoss(nn.Module):
         loss_dict = {"supervised": sup_loss.item()}
         total_loss = sup_loss
 
-        # Clustering loss on unlabeled data
-        if self.lambda_cluster != 0.0:
-            # Handle potential batch size mismatch
-            min_batch_size = min(logits_unlabeled.size(0), cluster_assignments.size(0))
-            cluster_loss = F.cross_entropy(
-                logits_unlabeled[:min_batch_size], cluster_assignments[:min_batch_size]
-            )
+        # # Clustering loss on unlabeled data
+        # if self.lambda_cluster != 0.0:
+        #     # Handle potential batch size mismatch
+        #     min_batch_size = min(logits_unlabeled.size(0), cluster_assignments.size(0))
+        #     cluster_loss = F.cross_entropy(
+        #         logits_unlabeled[:min_batch_size], cluster_assignments[:min_batch_size]
+        #     )
 
-            if torch.isnan(cluster_loss):
-                logger.warning("NaN loss detected for cluster_loss")
+        #     if torch.isnan(cluster_loss):
+        #         logger.warning("NaN loss detected for cluster_loss")
 
-            cluster_scale = self.get_cluster_scale(epoch)
-            if (not self.cluster_rampup_epochs == 0) and batch_idx == 0:
-                self.writer.add_scalar("Schedule/cluster_scale", cluster_scale, epoch)
-                logger.debug(f"Scheduled Cluster Scale: {cluster_scale:.4f}")
+        #     cluster_scale = self.get_cluster_scale(epoch)
+        #     if (not self.cluster_rampup_epochs == 0) and batch_idx == 0:
+        #         self.writer.add_scalar("Schedule/cluster_scale", cluster_scale, epoch)
+        #         logger.debug(f"Scheduled Cluster Scale: {cluster_scale:.4f}")
 
-            total_loss += self.lambda_cluster * cluster_scale * cluster_loss
-            loss_dict["clustering"] = cluster_loss.item()
+        #     total_loss += self.lambda_cluster * cluster_scale * cluster_loss
+        #     loss_dict["clustering"] = cluster_loss.item()
 
-        # Augmentation Consistency loss
-        if self.lambda_aug_consistency != 0.0:
-            aug_consistency_loss = self.consistency_loss(logits_aug1, logits_aug2)
+        # # Augmentation Consistency loss
+        # if self.lambda_aug_consistency != 0.0:
+        #     aug_consistency_loss = self.consistency_loss(logits_aug1, logits_aug2)
 
-            if torch.isnan(aug_consistency_loss):
-                logger.warning("NaN loss detected for aug_consistency_loss")
+        #     if torch.isnan(aug_consistency_loss):
+        #         logger.warning("NaN loss detected for aug_consistency_loss")
 
-            total_loss += self.lambda_aug_consistency * aug_consistency_loss
-            loss_dict["consistency"] = aug_consistency_loss.item()
+        #     total_loss += self.lambda_aug_consistency * aug_consistency_loss
+        #     loss_dict["consistency"] = aug_consistency_loss.item()
 
-        # Cluster Consistency loss
-        if self.lambda_cluster_consistency != 0.0:
-            cluster_consistency_loss = 0.5 * (
-                self.consistency_loss(
-                    self.cluster_assigner.compute_logits(features_unlabeled), logits_unlabeled
-                )
-                + self.consistency_loss(
-                    self.cluster_assigner.compute_logits(features_labeled), logits_labeled
-                )
-            )
+        # # Cluster Consistency loss
+        # if self.lambda_cluster_consistency != 0.0:
+        #     cluster_consistency_loss = 0.5 * (
+        #         self.consistency_loss(
+        #             self.cluster_assigner.compute_logits(features_unlabeled), logits_unlabeled
+        #         )
+        #         + self.consistency_loss(
+        #             self.cluster_assigner.compute_logits(features_labeled), logits_labeled
+        #         )
+        #     )
 
-            if torch.isnan(cluster_consistency_loss):
-                logger.warning("NaN loss detected for cluster_consistency_loss")
+        #     if torch.isnan(cluster_consistency_loss):
+        #         logger.warning("NaN loss detected for cluster_consistency_loss")
 
-            total_loss += self.lambda_cluster_consistency * cluster_consistency_loss
-            loss_dict["cluster_consistency"] = cluster_consistency_loss.item()
+        #     total_loss += self.lambda_cluster_consistency * cluster_consistency_loss
+        #     loss_dict["cluster_consistency"] = cluster_consistency_loss.item()
 
         return total_loss, loss_dict
