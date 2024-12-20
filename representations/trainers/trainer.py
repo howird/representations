@@ -1,5 +1,5 @@
 from ..models.semisupclassifier import SemiSupervisedClassifier
-from ..models.backbones import ResNet50Backbone
+from ..models.backbones import ResNet50Backbone, EfficientNetBackbone, BasicCNNBackbone
 from ..losses.semisuploss import SemiSupervisedLoss
 from ..datasets.imagenette import ImagenetteDataModule
 
@@ -39,7 +39,8 @@ class SemiSupervisedTrainer:
         self.writer = SummaryWriter(self.run_dir)
 
         # Initialize model and loss
-        backbone = ResNet50Backbone(pretrained=True)
+        # backbone = ResNet50Backbone(pretrained=True)
+        backbone = EfficientNetBackbone(pretrained=False)
         self.model = SemiSupervisedClassifier(
             num_classes, backbone, backbone.feature_dim, self.writer, **model_args
         ).to(self.device)
@@ -75,7 +76,7 @@ class SemiSupervisedTrainer:
             "supervised": 0.0,
             "clustering": 0.0,
             "consistency": 0.0,
-            "cluster_consistency": 0.0,
+            # "cluster_consistency": 0.0,
         }
 
         unlabeled_iter = iter(unlabeled_loader)

@@ -24,9 +24,10 @@ class SoftKMeansClusterAssignment(nn.Module):
         self.feature_dim = feature_dim
         self.max_iterations = max_iterations
         self.temperature = temperature
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Create centroids as a parameter but without gradients
-        self.centroids = nn.Parameter(torch.zeros(num_classes, feature_dim), requires_grad=False)
+        self.centroids = nn.Parameter(torch.zeros(num_classes, feature_dim), requires_grad=False).to(self.device)
         self.initialized = False
 
     def update_clusters(self, features: Tensor, normalize: bool = True) -> Tensor:
