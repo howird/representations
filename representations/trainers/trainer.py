@@ -27,6 +27,7 @@ class SemiSupervisedTrainer:
         model_args: dict = {},
         validation_freq: int = 10,
         feature_dim: int = 512,
+        pretrained: bool = False, 
         log_dir: str = "runs",
         exp_name: str = "",
     ):
@@ -40,8 +41,8 @@ class SemiSupervisedTrainer:
         self.writer = SummaryWriter(self.run_dir)
 
         # Initialize model and loss
-        # backbone = ResNet50Backbone(feature_dim, pretrained=True)
-        backbone = EfficientNetBackbone(feature_dim, pretrained=False)
+        # backbone = ResNet50Backbone(feature_dim, pretrained=pretrained)
+        backbone = EfficientNetBackbone(feature_dim, pretrained=pretrained)
         self.model = SemiSupervisedClassifier(
             num_classes, backbone, feature_dim, self.writer, **model_args
         ).to(self.device)
@@ -53,7 +54,19 @@ class SemiSupervisedTrainer:
         self.validation_freq = validation_freq
 
     def split_labeled_unlabeled(self, dataset: torch.utils.data.Dataset) -> Tuple[Subset, Subset]:
-        """Split dataset into labeled and unlabeled subsets"""
+        """
+        Split dataset into labeled and unlabeled subsets randomly.
+
+        Args:
+            dataset: Full training dataset to split
+
+        Returns:
+            labeled_subset: Subset containing labeled_ratio portion of data
+            unlabeled_subset: Subset containing remaining samples for unlabeled training
+
+        Note:
+            Uses random permutation to ensure unbiased splitting
+        """
         num_samples = len(dataset)
         num_labeled = int(num_samples * self.labeled_ratio)
 
@@ -70,7 +83,28 @@ class SemiSupervisedTrainer:
         data_module: ImagenetteDataModule,
         epoch: int,
     ) -> Dict[str, float]:
-        """Train for one epoch"""
+        """
+        Train model for one epoch using both labeled and unlabeled data.
+
+        Args:
+            labeled_loader: DataLoader for labeled samples
+            unlabeled_loader: DataLoader for unlabeled samples
+            data_module: ImagenetteDataModule containing transforms
+            epoch: Current epoch number
+
+        Returns:
+            Dict containing average losses for the epoch:
+                - total_loss: Combined loss
+                - supervised: Supervised cross-entropy loss
+                - clustering: Clustering loss (if enabled)
+                - consistency: Augmentation consistency loss (if enabled)
+
+        Notes:
+            - Applies strong augmentation to labeled data
+            - Applies weak+strong augmentation pairs to unlabeled data
+            - Uses gradient clipping during optimization
+            - Skips updates for batches with NaN losses
+        """
         self.model.train()
         total_loss = 0
         loss_components = {
@@ -139,7 +173,21 @@ class SemiSupervisedTrainer:
         }
 
     def validate(self, val_loader: DataLoader) -> float:
-        """Validate the model using mean per-class accuracy"""
+        """
+        Evaluate model performance on validation set.
+
+        Args:
+            val_loader: DataLoader for validation data
+
+        Returns:
+            mean_accuracy: Average per-class accuracy percentage
+
+        Notes:
+            - Computes accuracy separately for each class
+            - Returns mean of per-class accuracies for balanced evaluation
+            - Logs individual class accuracies for monitoring
+            - Ignores classes with no samples in validation set
+        """
         self.model.eval()
         num_classes = self.model.num_classes
         class_correct = torch.zeros(num_classes, device=self.device)
@@ -185,7 +233,28 @@ class SemiSupervisedTrainer:
         num_epochs: int = 100,
         batch_size: int = 64,
     ) -> Dict[str, List[float]]:
-        """Full training loop"""
+        """
+        Execute complete training procedure.
+
+        Args:
+            data_module: ImagenetteDataModule containing dataset and transforms
+            num_epochs: Total number of training epochs
+            batch_size: Batch size for both labeled and unlabeled loaders
+
+        Returns:
+            history: Dictionary containing training metrics over time:
+                - total_loss: Combined loss values
+                - supervised: Supervised loss values
+                - clustering: Clustering loss values
+                - consistency: Consistency loss values
+                - val_accuracy: Validation accuracies
+
+        Notes:
+            - Splits training data into labeled/unlabeled sets
+            - Validates every validation_freq epochs
+            - Logs metrics to tensorboard
+            - Saves final model weights
+        """
         train_dataset = data_module.train_dataloader().dataset
         # Split dataset and create loaders with appropriate transforms
         labeled_dataset, unlabeled_dataset = self.split_labeled_unlabeled(train_dataset)

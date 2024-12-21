@@ -10,7 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 class SoftKMeansClusterAssignment(nn.Module):
-    """Compute and update soft cluster assignments for unlabeled data using differentiable k-means"""
+    """
+    Compute and update soft cluster assignments using differentiable k-means clustering.
+    
+    This implementation uses a softmax-based soft assignment approach with a temperature
+    parameter to control the softness of the assignments. The cluster centroids are 
+    registered as nn.Parameters but with requires_grad=False to ensure updates only
+    happen through the explicit k-means update rule.
+    """
 
     def __init__(
         self,
@@ -32,12 +39,21 @@ class SoftKMeansClusterAssignment(nn.Module):
 
     def update_clusters(self, features: Tensor) -> Tensor:
         """
-        Update cluster centroids using soft k-means on all available features
+        Update cluster centroids using soft k-means clustering and return soft assignments.
 
         Args:
-            features: Combined labeled and unlabeled feature embeddings [N, D]
+            features: Feature embeddings of shape [N, D] where N is the number of samples
+                     and D is the feature dimension
+
         Returns:
-            assignments: Soft cluster assignments [N, K]
+            assignments: Soft cluster assignments of shape [N, K] where K is the number
+                        of clusters. Each row contains softmax probabilities summing to 1.
+
+        Notes:
+            - Centroids are initialized using random samples from the input features
+            - Uses temperature-scaled softmax for soft assignments
+            - Updates centroids using weighted averages based on soft assignments
+            - Normalizes updated centroids to unit length
         """
         # Check for invalid values
         if torch.isnan(features).any() or torch.isinf(features).any():
@@ -79,16 +95,29 @@ class SoftKMeansClusterAssignment(nn.Module):
 
     def compute_logits(self, features: torch.Tensor) -> torch.Tensor:
         """
-        Compute classification logits using KNN distances
+        Compute one-hot classification logits based on closest centroid.
 
         Args:
-            features: [N, D]
+            features: Input features of shape [N, D] where N is the number of samples
+                     and D is the feature dimension
+
         Returns:
-            logits: Classification logits [N, K]
+            logits: One-hot encoded logits of shape [N, K] where K is the number of
+                   clusters. Each row contains a 1 at the index of the closest centroid
+                   and 0 elsewhere.
+
+        Notes:
+            - Uses Euclidean distance to find closest centroid
+            - Detaches centroids to prevent gradient flow
+            - Returns hard one-hot assignments rather than soft probabilities
         """
-        # Compute negative squared Euclidean distances
+        # Compute distances
         dists = torch.cdist(features, self.centroids.detach())
-        logits = -dists
+        # Get index of closest centroid
+        min_indices = dists.argmin(dim=1)
+        # Create one-hot encoding
+        logits = torch.zeros_like(dists)
+        logits.scatter_(1, min_indices.unsqueeze(1), 1)
         return logits
 
 

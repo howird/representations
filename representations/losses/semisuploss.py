@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 
 class SemiSupervisedLoss(nn.Module):
     """
-    Combined loss for semi-supervised learning with clustering and consistency regularization
+    Combined loss function for semi-supervised learning with multiple components.
+
+    This loss combines:
+    1. Supervised cross-entropy loss on labeled data
+    2. Clustering loss to group unlabeled samples (with optional ramp-up)
+    3. Consistency loss between augmented views of the same samples
+    4. Optional cluster consistency loss between network predictions and cluster assignments
+
+    The relative importance of each component is controlled by lambda parameters.
     """
 
     def __init__(
@@ -53,7 +61,16 @@ class SemiSupervisedLoss(nn.Module):
         )
 
     def get_cluster_scale(self, epoch: int) -> float:
-        """Calculate cluster loss scaling factor using cosine rampup"""
+        """
+        Calculate the scaling factor for cluster loss using cosine rampup schedule.
+
+        Args:
+            epoch: Current training epoch
+
+        Returns:
+            scale: Scaling factor between 0 and 1, following a cosine curve from
+                  0 to 1 over cluster_rampup_epochs epochs
+        """
         if epoch >= self.cluster_rampup_epochs:
             return 1.0
         return float(1 - math.cos(math.pi * epoch / self.cluster_rampup_epochs)) / 2.0
@@ -82,19 +99,32 @@ class SemiSupervisedLoss(nn.Module):
         logits_aug2: Tensor,
     ) -> Tuple[Tensor, Dict[str, float]]:
         """
-        Compute combined semi-supervised loss
+        Compute the combined semi-supervised learning loss.
 
         Args:
-            logits_labeled: Predictions for labeled samples [B, C]
-            labels: Ground truth labels [B]
-            logits_unlabeled: Predictions for unlabeled samples [B, C]
-            cluster_assignments: Cluster assignments for unlabeled samples [B]
-            logits_aug1: Predictions for first augmentation [B, C]
-            logits_aug2: Predictions for second augmentation [B, C]
+            features_labeled: Feature embeddings of labeled samples [B, D]
+            logits_labeled: Model predictions for labeled samples [B, C]
+            labels: Ground truth labels for labeled samples [B]
+            epoch: Current training epoch
+            batch_idx: Current batch index
+            features_unlabeled: Feature embeddings of unlabeled samples [B, D]
+            logits_unlabeled: Model predictions for unlabeled samples [B, C]
+            logits_aug1: Predictions for first augmented view [B, C]
+            logits_aug2: Predictions for second augmented view [B, C]
 
         Returns:
-            total_loss: Combined loss value
-            loss_dict: Dictionary containing individual loss components
+            total_loss: Combined weighted sum of all loss components
+            loss_dict: Dictionary containing individual loss values for monitoring:
+                      - 'supervised': Cross-entropy loss on labeled data
+                      - 'clustering': K-means clustering loss (if enabled)
+                      - 'consistency': Augmentation consistency loss (if enabled)
+                      - 'cluster_consistency': Cluster prediction consistency (if enabled)
+
+        Notes:
+            - B is batch size, C is number of classes, D is feature dimension
+            - Clustering loss uses a ramp-up schedule if cluster_rampup_epochs > 0
+            - Consistency losses use temperature scaling for the softmax
+            - NaN detection is implemented for all loss components
         """
 
         if self.cluster_all:
@@ -151,13 +181,14 @@ class SemiSupervisedLoss(nn.Module):
 
         # Cluster Consistency loss
         if self.lambda_cluster_consistency != 0.0:
+            # Get one-hot assignments from closest centroids
+            unlabeled_cluster_logits = self.cluster_assigner.compute_logits(features_unlabeled)
+            labeled_cluster_logits = self.cluster_assigner.compute_logits(features_labeled)
+            
+            # Use cross entropy since we now have one-hot targets
             cluster_consistency_loss = 0.5 * (
-                self.consistency_loss(
-                    self.cluster_assigner.compute_logits(features_unlabeled), logits_unlabeled
-                )
-                + self.consistency_loss(
-                    self.cluster_assigner.compute_logits(features_labeled), logits_labeled
-                )
+                F.cross_entropy(logits_unlabeled, unlabeled_cluster_logits.argmax(dim=1)) +
+                F.cross_entropy(logits_labeled, labeled_cluster_logits.argmax(dim=1))
             )
 
             if torch.isnan(cluster_consistency_loss):
